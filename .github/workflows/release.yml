@@ -1,0 +1,27 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: make test dmg
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp dist/index.html build/Daily-8.html
+          gh release create "$GITHUB_REF_NAME" build/Daily-8-*.dmg build/Daily-8.html --title "Daily 8 $GITHUB_REF_NAME" --generate-notes
