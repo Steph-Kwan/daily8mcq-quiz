@@ -98,8 +98,12 @@ tests/            Node 测试
 
 这个项目只是一个工具，不附带任何真实考试的题目。导入和分享题库前，请确认你有权使用其中的内容；有版权的试题请只在自己的设备上使用。
 
+## 许可证
+
+[MIT](LICENSE) © 2026 Stephen Kwan。许可证只适用于代码和原创示例题库，不适用于你自己导入的题库内容。
+
 ---
 
 ## English
 
-**Daily 8** turns any multiple-choice question bank you prepare in Excel into short daily practice sessions, with a mistakes notebook, spaced review (1 / 3 / 7 / 14 days), and optional AI explanations and review plans using your own OpenAI API key — or any OpenAI-compatible endpoint (Chat Completions). It supports single choice, multiple choice and true/false; questions can be text, text with images, or full screenshots, and pictures can be pasted straight into the spreadsheet. It runs as a single-file web page or as a native macOS app (13+, universal), and everything stays on your device. See [the bank format](docs/题库格式.md) (column names are accepted in English too: `question`, `A`–`F`, `answer`, `type`, `category`, `image`, `explanation`, `source`, `id`).
+**Daily 8** turns any multiple-choice question bank you prepare in Excel into short daily practice sessions, with a mistakes notebook, spaced review (1 / 3 / 7 / 14 days), and optional AI explanations and review plans using your own OpenAI API key — or any OpenAI-compatible endpoint (Chat Completions). It supports single choice, multiple choice and true/false; questions can be text, text with images, or full screenshots, and pictures can be pasted straight into the spreadsheet. It runs as a single-file web page or as a native macOS app (13+, universal), and everything stays on your device. MIT licensed. See [the bank format](docs/题库格式.md) (column names are accepted in English too: `question`, `A`–`F`, `answer`, `type`, `category`, `image`, `explanation`, `source`, `id`).

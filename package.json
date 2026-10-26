@@ -10,5 +10,6 @@
     "esbuild": "0.28.2",
     "fflate": "0.8.3",
     "openai": "7.43.0"
-  }
+  },
+  "license": "MIT"
 }
