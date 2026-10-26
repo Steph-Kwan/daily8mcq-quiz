@@ -10,17 +10,17 @@ const fmtDate = (ms, opts = { dateStyle: 'medium', timeStyle: 'short' }) => new 
 const pct = x => (x === null || x === undefined ? '—' : Math.round(x * 100) + '%');
 const letters = a => [...(a || '')].join(interfaceLanguage === 'en' ? ', ' : '、') || '—';
 
-let settings = { lang: interfaceLanguage, bankId: null, ai: { model: DEFAULT_AI_MODEL }, sessionSize: null, preferNew: true };
+let settings = { lang: interfaceLanguage, bankId: null, ai: { model: DEFAULT_AI_MODEL, baseURL: '', images: true }, sessionSize: null, preferNew: true };
 let banks = [], bank = null, progress = emptyProgress(), analysis = null;
 let view = 'home', pos = 0, activeHistory = 0, storageWarning = false;
 let filters = { category: 'all', type: 'all', source: 'all' }, wrongFilter = 'active', browse = { query: '', page: 0 };
-let pendingImport = null, aiJobs = new Map(), planJob = null, busy = false;
+let pendingImport = null, aiJobs = new Map(), planJob = null, busy = false, aiModelList = [];
 
 // ---- persistence ----
 
 function loadSettings() {
   try { Object.assign(settings, JSON.parse(appStore.get(SETTINGS_KEY) || '{}')); } catch { storageWarning = true; }
-  settings.ai = { model: DEFAULT_AI_MODEL, ...settings.ai };
+  settings.ai = { model: DEFAULT_AI_MODEL, baseURL: '', images: true, ...settings.ai };
 }
 function saveSettings() { try { appStore.set(SETTINGS_KEY, JSON.stringify(settings)); } catch { storageWarning = true; } }
 function saveProgress() {
@@ -556,12 +556,19 @@ function settingsView() {
     <div class="hero"><div><div class="eyebrow">${esc(t('设置'))}</div><h1>${esc(t('让它更适合你。'))}</h1></div></div>
     <div class="settings-grid">
       <section class="panel"><h2>✦ ${esc(t('AI 讲解'))}</h2>
-        <p>${esc(t('AI 讲解错题和复习计划使用你自己的 Anthropic API Key，费用由 Anthropic 按用量计费。没有 Key 也可以正常刷题。'))}</p>
+        <p>${esc(t('AI 讲解错题和复习计划使用你自己的 OpenAI API Key（也可以用任何兼容 OpenAI 接口的服务），费用由服务商按用量计费。没有 Key 也可以正常刷题。'))}</p>
         <label for="api-key">API Key</label>
-        <div class="inline-form"><input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="${esc(key ? t('已保存（输入新值可替换）') : 'sk-ant-…')}"><button class="primary" id="save-key">${esc(t('保存'))}</button>${key ? `<button id="clear-key">${esc(t('清除'))}</button>` : ''}</div>
-        <p class="meta">${esc(appStore.native ? t('Key 保存在本机的 macOS 钥匙串里，只会发送给 api.anthropic.com。') : t('Key 保存在这个浏览器里，只会发送给 api.anthropic.com。在公用电脑上用完请清除。'))} <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">${esc(t('获取 API Key'))}</a></p>
+        <div class="inline-form"><input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="${esc(key ? t('已保存（输入新值可替换）') : 'sk-…')}"><button class="primary" id="save-key">${esc(t('保存'))}</button>${key ? `<button id="clear-key">${esc(t('清除'))}</button>` : ''}</div>
+        <p class="meta">${esc(appStore.native ? t('Key 保存在本机的 macOS 钥匙串里，只会发送给下面的接口地址。') : t('Key 保存在这个浏览器里，只会发送给下面的接口地址。在公用电脑上用完请清除。'))} <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">${esc(t('获取 OpenAI API Key'))}</a></p>
+        <label for="ai-base">${esc(t('接口地址'))}</label>
+        <input id="ai-base" class="wide-input" spellcheck="false" value="${esc(settings.ai.baseURL)}" placeholder="${esc(DEFAULT_BASE_URL)}">
+        <p class="meta">${esc(t('留空即使用 OpenAI 官方接口。使用 DeepSeek、通义千问或中转服务时，填写对方提供的地址（通常以 /v1 结尾）。'))}</p>
         <label for="ai-model">${esc(t('模型'))}</label>
-        <select id="ai-model">${AI_MODELS.map(m => `<option value="${m.id}" ${aiModel() === m.id ? 'selected' : ''}>${esc(m.label)} — ${esc(t(m.note))}</option>`).join('')}</select>
+        <input id="ai-model" class="wide-input" list="ai-models" spellcheck="false" value="${esc(settings.ai.model)}" placeholder="${esc(DEFAULT_AI_MODEL)}">
+        <datalist id="ai-models">${aiModelList.map(m => `<option value="${esc(m)}">`).join('')}</datalist>
+        <p class="meta">${esc(t('填写模型名称；点「测试连接」后，这里可以从接口提供的模型里选择。'))}</p>
+        <label class="check"><input type="checkbox" id="ai-images" ${aiSendsImages() ? 'checked' : ''}> ${esc(t('发送题目图片（所选模型需要支持识图）'))}</label>
+        <div class="line"></div>
         <button id="test-ai" ${key ? '' : 'disabled'}>${esc(t('测试连接'))}</button> <span id="ai-status" class="meta" role="status"></span>
       </section>
       <section class="panel"><h2>${esc(t('备份与恢复'))}</h2>
@@ -582,12 +589,19 @@ function settingsView() {
     appSecrets.set(API_KEY_SECRET, value); toast('API Key 已保存'); render();
   };
   if ($('#clear-key')) $('#clear-key').onclick = () => { appSecrets.set(API_KEY_SECRET, ''); toast('API Key 已清除'); render(); };
-  $('#ai-model').onchange = e => { settings.ai.model = e.target.value; saveSettings(); };
+  $('#ai-base').onchange = e => { settings.ai.baseURL = e.target.value.trim(); saveSettings(); };
+  $('#ai-model').onchange = e => { settings.ai.model = e.target.value.trim(); saveSettings(); };
+  $('#ai-images').onchange = e => { settings.ai.images = e.target.checked; saveSettings(); };
   $('#test-ai').onclick = async () => {
     const status = $('#ai-status');
     status.textContent = t('连接中…'); status.className = 'meta';
-    try { const name = await testAiConnection(); status.textContent = t('连接成功：{m}', { m: name }); status.className = 'good'; }
-    catch (err) { status.textContent = err.message; status.className = 'bad'; }
+    try {
+      const { ids, found } = await testAiConnection();
+      aiModelList = ids;
+      $('#ai-models').innerHTML = ids.map(m => `<option value="${esc(m)}">`).join('');
+      status.textContent = found || !ids.length ? t('连接成功，可以使用 {m}', { m: aiModel() }) : t('连接成功，但接口的模型列表里没有 {m}，请检查模型名称。', { m: aiModel() });
+      status.className = found || !ids.length ? 'good' : 'bad';
+    } catch (err) { status.textContent = err.message; status.className = 'bad'; }
   };
   $('#export').onclick = exportBackup;
   $('#restore').onchange = async e => {

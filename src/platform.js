@@ -40,6 +40,44 @@ const appSecrets = {
   },
 };
 
+/**
+ * fetch for API calls. In the app, requests go through the native URLSession (streamed back chunk by chunk): pages
+ * loaded from file:// have a "null" origin, which some APIs' CORS answers reject, and relay services often send no
+ * CORS headers at all. Browsers use the normal fetch.
+ */
+const nativeFetches = new Map();
+let nativeFetchId = 0;
+window.__daily8Fetch = ({ id, kind, status, headers, data, message }) => {
+  const f = nativeFetches.get(id);
+  if (!f) return;
+  if (kind === 'head') f.resolve(new Response(f.body, { status, headers }));
+  else if (kind === 'chunk') f.controller.enqueue(base64ToBytes(data));
+  else if (kind === 'end') { f.controller.close(); nativeFetches.delete(id); }
+  else if (kind === 'error') {
+    const err = message === 'Aborted' ? new DOMException('Aborted', 'AbortError') : new TypeError(message || 'Network request failed');
+    f.reject(err);
+    try { f.controller.error(err); } catch {}
+    nativeFetches.delete(id);
+  }
+};
+function appFetch(input, init = {}) {
+  if (!nativeBridge) return fetch(input, init);
+  return new Promise((resolve, reject) => {
+    const id = ++nativeFetchId, url = typeof input === 'string' ? input : input.url;
+    if (init.signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+    const entry = { resolve, reject };
+    entry.body = new ReadableStream({ start: c => { entry.controller = c; } });
+    nativeFetches.set(id, entry);
+    init.signal?.addEventListener('abort', () => {
+      nativeBridge.post({ type: 'fetchCancel', id });
+      window.__daily8Fetch({ id, kind: 'error', message: 'Aborted' });
+    });
+    const body = init.body == null ? '' : typeof init.body === 'string' ? init.body : null;
+    if (body === null) return reject(new TypeError('Only text request bodies are supported'));
+    nativeBridge.post({ type: 'fetch', id, url, method: init.method || 'GET', headers: Object.fromEntries(new Headers(init.headers).entries()), body });
+  });
+}
+
 const bytesToBase64 = bytes => { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); };
 const base64ToBytes = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 

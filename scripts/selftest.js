@@ -37,11 +37,11 @@ if (phase === 'write') {
   out.dialogResult = await pending;
 
   // The SDK runs inside WebKit: an invalid key must come back as a clear authentication error, also with an image attached.
-  appSecrets.set(API_KEY_SECRET, 'sk-ant-selftest-invalid');
+  appSecrets.set(API_KEY_SECRET, 'sk-selftest-invalid');
   try { await testAiConnection(); out.aiTest = 'unexpected success'; } catch (e) { out.aiTest = e.message; }
   const imageQuestion = bank.questions.find(q => q.images.length);
   try { await explainMistake(imageQuestion, 'A', {}); out.aiExplain = 'unexpected success'; } catch (e) { out.aiExplain = e.message; }
-  out.imageBlock = (await imageBlock(await bankStore.asset(bank.id, imageQuestion.images[0]))).source.media_type;
+  out.imageBlock = (await imageBlock(await bankStore.asset(bank.id, imageQuestion.images[0]))).image_url.url.slice(0, 22);
 
   // Markdown from the model is rendered without executing HTML.
   out.markdownSafe = !renderMarkdown('<img src=x onerror=alert(1)> **ok**').includes('<img');
@@ -50,7 +50,7 @@ if (phase === 'write') {
   out.banks = banks.map(b => b.title).sort();
   out.current = bank.title;
   out.history = progress.history.length;
-  out.keychain = appSecrets.get(API_KEY_SECRET) === 'sk-ant-selftest-invalid';
+  out.keychain = appSecrets.get(API_KEY_SECRET) === 'sk-selftest-invalid';
   // Clean up: remove the key, the imported bank and the database.
   appSecrets.set(API_KEY_SECRET, '');
   for (const b of banks.filter(b => !b.demo)) await bankStore.remove(b.id);

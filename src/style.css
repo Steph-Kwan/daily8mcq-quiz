@@ -194,6 +194,7 @@ textarea { width: 100%; }
 .settings-grid input[type=file] { width: 100%; margin-top: 10px; }
 .inline-form { display: flex; gap: 8px; margin: 6px 0; }
 .inline-form input { flex: 1; min-width: 0; }
+.wide-input { width: 100%; margin: 6px 0 2px; }
 
 .language-switch { display: flex; gap: 3px; background: #e8ede3; border: 1px solid var(--line); padding: 3px; border-radius: 9px; }
 .language-switch button { font-size: 12px; padding: 5px 11px; border-radius: 6px; background: transparent; min-width: 42px; }

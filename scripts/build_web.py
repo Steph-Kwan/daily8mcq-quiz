@@ -4,7 +4,7 @@ import base64, json, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC, DIST = ROOT / 'src', ROOT / 'dist'
-SCRIPTS = ['vendor/fflate.js', 'vendor/anthropic.js', 'platform.js', 'i18n.js', 'i18n-en.js', 'xlsx.js', 'bank.js', 'progress.js', 'ai.js', 'app.js']
+SCRIPTS = ['vendor/fflate.js', 'vendor/openai.js', 'platform.js', 'i18n.js', 'i18n-en.js', 'xlsx.js', 'bank.js', 'progress.js', 'ai.js', 'app.js']
 
 def b64(path):
     return base64.b64encode(path.read_bytes()).decode()

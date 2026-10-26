@@ -2,14 +2,14 @@
 import { build } from 'esbuild';
 
 const bundles = [
-  { file: 'anthropic.js', global: 'Anthropic', source: "export { default } from '@anthropic-ai/sdk';" },
+  { file: 'openai.js', global: 'OpenAI', source: "export { default } from 'openai';" },
   { file: 'fflate.js', global: 'fflate', source: "export { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';" },
 ];
 for (const b of bundles) {
   await build({
     stdin: { contents: b.source, resolveDir: process.cwd() },
     bundle: true, minify: true, format: 'iife', globalName: b.global, target: 'safari16',
-    footer: b.file === 'anthropic.js' ? { js: 'Anthropic=Anthropic.default;' } : undefined,
+    footer: b.file === 'openai.js' ? { js: 'OpenAI=OpenAI.default;' } : undefined,
     legalComments: 'inline', outfile: `src/vendor/${b.file}`,
   });
 }

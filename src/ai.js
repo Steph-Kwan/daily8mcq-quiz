@@ -1,48 +1,47 @@
 'use strict';
-// AI tutor on the learner's own Anthropic API key: explains mistakes and drafts a review plan. Needs src/vendor/anthropic.js.
+// AI tutor on the learner's own OpenAI API key (or any OpenAI-compatible endpoint): explains mistakes and drafts a
+// review plan. Uses Chat Completions, which compatible providers also implement. Needs src/vendor/openai.js.
 
-const AI_MODELS = [
-  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', note: '讲解质量最好（默认）' },
-  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', note: '更快，费用约为 Opus 的一半' },
-  { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5', note: '最快、最便宜' },
-];
-const DEFAULT_AI_MODEL = 'claude-opus-5-5';
-const API_KEY_SECRET = 'anthropic-api-key';
+const DEFAULT_AI_MODEL = 'gpt-5.5';
+const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
+const API_KEY_SECRET = 'openai-api-key';
 const MAX_IMAGE_EDGE = 1568;
 
 class AiError extends Error {
   constructor(message, { cancelled = false } = {}) { super(message); this.cancelled = cancelled; }
 }
 
-function aiModel() {
-  return AI_MODELS.some(m => m.id === settings.ai?.model) ? settings.ai.model : DEFAULT_AI_MODEL;
-}
+const aiModel = () => settings.ai?.model?.trim() || DEFAULT_AI_MODEL;
+const aiBaseURL = () => settings.ai?.baseURL?.trim().replace(/\/+$/, '') || DEFAULT_BASE_URL;
+const aiSendsImages = () => settings.ai?.images !== false;
 
 function aiClient() {
   const apiKey = appSecrets.get(API_KEY_SECRET);
   if (!apiKey) throw new AiError(t('还没有设置 API Key。请到「设置 → AI 讲解」里填写。'));
-  // The key belongs to the person using this copy of the app and never leaves their device except to api.anthropic.com.
-  return new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  // The key belongs to the person using this copy of the app; it is only sent to the endpoint they configured.
+  return new OpenAI({ apiKey, baseURL: aiBaseURL(), dangerouslyAllowBrowser: true, fetch: appFetch });
 }
 
 function explainAiError(err) {
   if (err instanceof AiError) return err;
-  if (err instanceof Anthropic.APIUserAbortError) return new AiError(t('已停止'), { cancelled: true });
-  if (err instanceof Anthropic.AuthenticationError) return new AiError(t('API Key 无效，请到设置里检查。'));
-  if (err instanceof Anthropic.PermissionDeniedError) return new AiError(t('这个 API Key 没有权限使用所选模型。'));
-  if (err instanceof Anthropic.NotFoundError) return new AiError(t('找不到所选模型，请到设置里换一个模型。'));
-  if (err instanceof Anthropic.RateLimitError) return new AiError(t('请求太频繁或额度已用完，请稍后再试。'));
-  if (err instanceof Anthropic.BadRequestError) return new AiError(t('请求被拒绝：{msg}', { msg: err.message }));
-  if (err instanceof Anthropic.APIConnectionError) return new AiError(t('无法连接到 Anthropic，请检查网络。'));
-  if (err instanceof Anthropic.APIError) return new AiError(t('AI 服务出错（{status}），请稍后再试。', { status: err.status ?? '?' }));
+  if (err instanceof OpenAI.APIUserAbortError) return new AiError(t('已停止'), { cancelled: true });
+  if (err instanceof OpenAI.AuthenticationError) return new AiError(t('API Key 无效，请到设置里检查。'));
+  if (err instanceof OpenAI.PermissionDeniedError) return new AiError(t('这个 API Key 没有权限使用所选模型。'));
+  if (err instanceof OpenAI.NotFoundError) return new AiError(t('找不到所选模型或接口地址不对，请到设置里检查。'));
+  if (err instanceof OpenAI.RateLimitError) return new AiError(t('请求太频繁或额度已用完，请稍后再试。'));
+  if (err instanceof OpenAI.BadRequestError) return new AiError(t('请求被拒绝：{msg}', { msg: err.message }) + (aiSendsImages() ? ' ' + t('如果所选模型不支持图片，可以在设置里关闭「发送题目图片」。') : ''));
+  if (err instanceof OpenAI.APIConnectionError) return new AiError(t('无法连接到 {host}，请检查网络和接口地址。', { host: new URL(aiBaseURL()).host }));
+  if (err instanceof OpenAI.APIError) return new AiError(t('AI 服务出错（{status}），请稍后再试。', { status: err.status ?? '?' }));
   return new AiError(err?.message || String(err));
 }
 
-/** Free check that the key works and can see the chosen model (Models API, no tokens used). */
+/** Lists the models the endpoint offers (no tokens used); returns { ids, found } for the configured model. */
 async function testAiConnection() {
   try {
-    const model = await aiClient().models.retrieve(aiModel());
-    return model.display_name || model.id;
+    const ids = [];
+    for await (const m of aiClient().models.list()) ids.push(m.id);
+    ids.sort();
+    return { ids, found: ids.includes(aiModel()) };
   } catch (err) { throw explainAiError(err); }
 }
 
@@ -62,32 +61,35 @@ async function imageBlock(blob) {
       out = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.9));
     }
     const data = await new Promise(resolve => { const fr = new FileReader(); fr.onload = () => resolve(String(fr.result).split(',')[1]); fr.readAsDataURL(out); });
-    return { type: 'image', source: { type: 'base64', media_type: out.type, data } };
+    return { type: 'image_url', image_url: { url: `data:${out.type};base64,${data}` } };
   } finally { URL.revokeObjectURL(url); }
 }
 
 /** Streams one request; onText receives the text so far. Returns { text, model }. */
-async function streamAi({ system, content, effort, onText, signal }) {
+async function streamAi({ system, content, onText, signal }) {
   let client;
   try { client = aiClient(); } catch (err) { throw explainAiError(err); }
-  const model = aiModel();
-  const params = { model, max_tokens: 16000, system, messages: [{ role: 'user', content }], output_config: { effort } };
-  // Server-side fallback re-runs a declined request on another model (not offered for Haiku).
-  if (model !== 'claude-haiku-5-5') Object.assign(params, { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' });
   try {
-    const stream = client.beta.messages.stream(params, { signal });
-    let text = '';
-    for await (const event of stream) {
-      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') { text += event.delta.text; onText?.(text); }
+    const stream = await client.chat.completions.create({
+      model: aiModel(),
+      messages: [{ role: 'system', content: system }, { role: 'user', content }],
+      stream: true,
+    }, { signal });
+    let text = '', refusal = '', finish = null, model = aiModel();
+    for await (const chunk of stream) {
+      model = chunk.model || model;
+      const choice = chunk.choices?.[0];
+      if (!choice) continue;
+      if (choice.delta?.content) { text += choice.delta.content; onText?.(text); }
+      if (choice.delta?.refusal) refusal += choice.delta.refusal;
+      finish = choice.finish_reason || finish;
     }
-    const message = await stream.finalMessage();
-    if (message.stop_reason === 'refusal') throw new AiError(t('AI 拒绝回答这道题。'));
-    // If a fallback took over mid-answer, only the text after the last switch point is the final answer.
-    const lastSwitch = message.content.map(b => b.type).lastIndexOf('fallback');
-    const final = message.content.slice(lastSwitch + 1).filter(b => b.type === 'text').map(b => b.text).join('');
-    const truncated = message.stop_reason === 'max_tokens' ? '\n\n' + t('（回答过长，已被截断）') : '';
-    return { text: final + truncated, model: message.model };
-  } catch (err) { throw explainAiError(err); }
+    // The SDK ends the stream quietly when the request is aborted.
+    if (signal?.aborted) throw new AiError(t('已停止'), { cancelled: true });
+    if (refusal || finish === 'content_filter') throw new AiError(t('AI 拒绝回答这道题。') + (refusal ? ' ' + refusal : ''));
+    if (!text.trim()) throw new AiError(t('AI 没有返回内容，请换个模型再试。'));
+    return { text: text + (finish === 'length' ? '\n\n' + t('（回答过长，已被截断）') : ''), model };
+  } catch (err) { throw signal?.aborted ? new AiError(t('已停止'), { cancelled: true }) : explainAiError(err); }
 }
 
 const replyLanguage = () => (interfaceLanguage === 'en' ? 'English' : '简体中文');
@@ -121,13 +123,13 @@ async function explainMistake(q, userAnswer, { onText, signal }) {
   parts.push(interfaceLanguage === 'en'
     ? 'Please cover: 1) why the correct answer is right; 2) what is wrong with the student\'s choice (and each other option, briefly); 3) the key concept being tested; 4) one tip to avoid this mistake next time.'
     : '请包括：1）正确答案为什么对；2）学生选的答案错在哪里（其他选项也简要说明）；3）这题考的核心知识点；4）一个下次避免出错的小技巧。');
-  const content = [...await questionImages(q), { type: 'text', text: parts.join('\n\n') }];
-  return streamAi({ system, content, effort: 'medium', onText, signal });
+  const content = [...(aiSendsImages() ? await questionImages(q) : []), { type: 'text', text: parts.join('\n\n') }];
+  return streamAi({ system, content, onText, signal });
 }
 
 async function draftReviewPlan(summary, { onText, signal }) {
   const system = `You are a study coach. From the learner's practice statistics, write a realistic, specific review plan in ${replyLanguage()} using Markdown (headings, short lists, and a day-by-day table). Prioritise weak categories and questions that are due for spaced review, respect the daily time budget, and keep the plan achievable. Base everything on the numbers given; do not invent statistics.`;
-  return streamAi({ system, content: [{ type: 'text', text: summary }], effort: 'high', onText, signal });
+  return streamAi({ system, content: summary, onText, signal });
 }
 
 // ---- Markdown (subset) to safe HTML ----

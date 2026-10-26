@@ -39,7 +39,7 @@ final class Store {
     }
 }
 
-/// The Anthropic API key is kept in the login Keychain rather than in storage.json.
+/// The OpenAI API key is kept in the login Keychain rather than in storage.json.
 enum Keychain {
     static let service = ProcessInfo.processInfo.environment["DAILY8_KEYCHAIN_SERVICE"] ?? "com.stephenkwan.daily8"
 
@@ -67,6 +67,52 @@ enum Keychain {
     }
 }
 
+/// Performs the page's API requests with URLSession and streams responses back to platform.js (see appFetch there).
+final class NativeFetch: NSObject, URLSessionDataDelegate {
+    weak var webView: WKWebView?
+    private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
+    private var ids: [Int: Int] = [:]          // task identifier -> page request id
+    private var tasks: [Int: URLSessionDataTask] = [:]
+
+    func start(id: Int, url: URL, method: String, headers: [String: String], body: String) {
+        var request = URLRequest(url: url, timeoutInterval: 600)
+        request.httpMethod = method
+        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+        if !body.isEmpty { request.httpBody = Data(body.utf8) }
+        let task = session.dataTask(with: request)
+        ids[task.taskIdentifier] = id
+        tasks[id] = task
+        task.resume()
+    }
+
+    func cancel(id: Int) { tasks.removeValue(forKey: id)?.cancel() }
+
+    private func send(_ event: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: event) else { return }
+        webView?.evaluateJavaScript("window.__daily8Fetch(" + String(decoding: data, as: UTF8.self) + ")")
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let id = ids[dataTask.taskIdentifier], let http = response as? HTTPURLResponse else { return completionHandler(.cancel) }
+        var headers: [String: String] = [:]
+        for (k, v) in http.allHeaderFields { headers[String(describing: k).lowercased()] = String(describing: v) }
+        send(["id": id, "kind": "head", "status": http.statusCode, "headers": headers])
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard let id = ids[dataTask.taskIdentifier] else { return }
+        send(["id": id, "kind": "chunk", "data": data.base64EncodedString()])
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let id = ids.removeValue(forKey: task.taskIdentifier) else { return }
+        tasks.removeValue(forKey: id)
+        if let error = error { send(["id": id, "kind": "error", "message": error.localizedDescription]) }
+        else { send(["id": id, "kind": "end"]) }
+    }
+}
+
 /// Breaks the retain cycle between WKUserContentController and its handler.
 final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
     weak var target: WKScriptMessageHandler?
@@ -77,8 +123,9 @@ final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
-    static let secretNames = ["anthropic-api-key"]
+    static let secretNames = ["openai-api-key"]
     let store = Store()
+    let network = NativeFetch()
     var window: NSWindow!
     var webView: WKWebView!
     let paper = NSColor(red: 0xf6 / 255, green: 0xf7 / 255, blue: 0xf2 / 255, alpha: 1)
@@ -97,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         }
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
+        network.webView = webView
         webView.uiDelegate = self
         webView.allowsMagnification = true
         webView.setValue(false, forKey: "drawsBackground")
@@ -156,6 +204,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 guard let tiff = image?.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
                 try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + ".png"))
             }
+        case "fetch":
+            guard let id = body["id"] as? Int, let urlString = body["url"] as? String, let url = URL(string: urlString),
+                  ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return }
+            network.start(id: id, url: url, method: body["method"] as? String ?? "GET",
+                          headers: body["headers"] as? [String: String] ?? [:], body: body["body"] as? String ?? "")
+        case "fetchCancel":
+            if let id = body["id"] as? Int { network.cancel(id: id) }
         case "save":
             if let name = body["name"] as? String, let b64 = body["base64"] as? String, let data = Data(base64Encoded: b64) { save(data, suggestedName: name) }
         default:
